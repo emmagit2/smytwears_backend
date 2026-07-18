@@ -5,7 +5,7 @@ const paystack = require("../services/paystack");
 const email    = require("../services/email");
 const { creditAffiliateForOrder } = require("../services/affiliateCredit");
 const { sendPurchaseEvent }       = require("../services/metaConversions");
-const { createShipment }          = require("../services/shipbubbleService");
+const { createShipment }          = require("../services/ShipbubbleService");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: mark an order as paid, send emails, and credit any referring affiliate
