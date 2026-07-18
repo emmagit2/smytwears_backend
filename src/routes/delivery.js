@@ -1,7 +1,7 @@
 const express      = require("express");
 const router       = express.Router();
 const nigeriaData  = require("../data/nigeriaLocations.json");
-const { getDeliveryRates, getPackageCategories } = require("../services/shipbubbleService");
+const { getDeliveryRates, getPackageCategories } = require("../services/ShipbubbleService");
 // GET /delivery/states
 router.get("/states", (req, res) => {
   const states = nigeriaData.map(s => ({
