@@ -3,12 +3,15 @@ const router   = express.Router();
 const supabase = require("../services/supabase");
 const paystack = require("../services/paystack");
 const email    = require("../services/email");
+const { creditAffiliateForOrder } = require("../services/affiliateCredit");
+const { sendPurchaseEvent }       = require("../services/metaConversions");
+const { createShipment }          = require("../services/shipbubbleService");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: mark an order as paid and send emails
+// Helper: mark an order as paid, send emails, and credit any referring affiliate
 // Used by both /verify and /webhook to avoid duplication
 // ─────────────────────────────────────────────────────────────────────────────
-async function markOrderPaid(orderNumber, reference, amountNaira = null) {
+async function markOrderPaid(orderNumber, reference, amountNaira = null, req = {}) {
   const { data: order, error } = await supabase
     .from("orders")
     .update({
@@ -24,6 +27,17 @@ async function markOrderPaid(orderNumber, reference, amountNaira = null) {
   // .eq("payment_status", "pending") returns null if already paid — that's intentional
   if (error || !order) return null;
 
+  // Payment just confirmed for the first time — safe to credit the
+  // referring affiliate now (creditAffiliateForOrder no-ops if there's
+  // no affiliate_code, and is itself idempotent via affiliate_credited).
+  creditAffiliateForOrder(order).catch(err => console.error("Affiliate credit error:", err));
+
+  // Fire the server-side Meta Conversions API Purchase event — this is the
+  // highest-volume payment path (card via Paystack), and only fires here
+  // once, thanks to the "pending" guard above preventing double-processing
+  // between /verify and /webhook racing each other.
+  sendPurchaseEvent(order, req).catch(err => console.error("Meta CAPI error:", err));
+
   // Emails (non-blocking)
   email.sendPaymentConfirmation(order).catch(console.error);
 
@@ -34,6 +48,44 @@ async function markOrderPaid(orderNumber, reference, amountNaira = null) {
         `Order: ${reference}\nAmount: ₦${amountNaira.toLocaleString()}\nCustomer: ${order.customer_email}`
       )
       .catch(console.error);
+  }
+
+  // Create the real Shipbubble shipment now that payment is confirmed.
+  // Awaited here (not fire-and-forget) so any failure is logged clearly,
+  // since a failed shipment creation means the order will show no tracking
+  // info until manually retried.
+  if (order.shipbubble_data?.request_token) {
+    try {
+      const shipment = await createShipment({
+        request_token: order.shipbubble_data.request_token,
+        service_code:  order.shipbubble_data.service_code,
+        courier_id:    order.shipbubble_data.courier_id,
+      });
+
+      await supabase
+        .from("orders")
+        .update({
+          shipbubble_data: {
+            ...order.shipbubble_data,
+            shipment_order_id:     shipment.shipment_order_id,
+            shipment_tracking_url: shipment.tracking_url,
+            shipment_status:       shipment.shipment_status,
+          },
+        })
+        .eq("id", order.id);
+    } catch (err) {
+      // Don't fail the payment confirmation over this — log it clearly so
+      // it can be created manually from the admin panel if needed. Common
+      // causes: request_token expired (>7 days old) or courier no longer
+      // available for that route.
+      console.error(
+        `Shipment creation failed for order ${order.order_number}:`,
+        err.message,
+        err.details || ""
+      );
+    }
+  } else {
+    console.warn(`Order ${order.order_number} has no shipbubble_data — skipping shipment creation.`);
   }
 
   return order;
@@ -104,7 +156,7 @@ router.get("/verify", async (req, res) => {
     return res.json({ success: false, status: tx.status });
   }
 
-  const order = await markOrderPaid(reference, reference);
+  const order = await markOrderPaid(reference, reference, null, req);
 
   // order will be null if the webhook already processed it — that's fine
   return res.json({
@@ -160,7 +212,7 @@ router.post(
       const amountNaira = event.data.amount / 100; // kobo → naira
 
       try {
-        await markOrderPaid(ref, ref, amountNaira);
+        await markOrderPaid(ref, ref, amountNaira, req);
       } catch (err) {
         console.error("Webhook order update error:", err.message);
       }

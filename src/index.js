@@ -10,6 +10,7 @@ const productsRouter   = require("./routes/products");
 const paymentsRouter   = require("./routes/payments");
 const contactRouter    = require("./routes/contact");
 const deliveryRouter   = require("./routes/delivery");
+const webhooksRouter   = require("./routes/webhook");
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -41,9 +42,14 @@ const orderLimiter = rateLimit({
   message: { error: "Order limit reached. Please try again later." },
 });
 
-// ── Body parsing ──────────────────────────────────────────────
-// IMPORTANT: webhook raw parser must come before express.json()
+// ── Webhooks — MUST be mounted before express.json() ────────────
+// Both Paystack and Shipbubble webhooks need the raw, unparsed request
+// body to verify their HMAC signatures. If express.json() runs first,
+// it consumes the body stream and signature verification breaks.
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
+app.use("/webhook", webhooksRouter);
+
+// ── Body parsing (everything else) ──────────────────────────────
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
