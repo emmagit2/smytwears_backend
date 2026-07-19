@@ -49,10 +49,12 @@ const PlaceOrderSchema = z.object({
   affiliate_code:   z.string().optional(),
   // Meta browser cookies, forwarded from Checkout.jsx — used later by
   // metaConversions.js to attach fbp/fbc to the server-side Purchase event
-  // once payment is confirmed. Optional since not every visitor has them
-  // (e.g. first-party cookies blocked, or no Pixel init yet).
-  fbp:              z.string().optional(),
-  fbc:              z.string().optional(),
+  // once payment is confirmed. Nullish (not just optional) since the
+  // frontend sends an explicit `null` — not `undefined` — when a visitor
+  // doesn't have these cookies yet (e.g. first-party cookies blocked, or
+  // no Pixel init yet), and Zod's .optional() alone rejects null.
+  fbp:              z.string().nullish(),
+  fbc:              z.string().nullish(),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
